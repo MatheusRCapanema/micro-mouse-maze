@@ -1,12 +1,11 @@
 from flask import Flask
 from flask_restx import Api
-from api.views import api as maze_ns
+import api.views
 
 app = Flask(__name__)
-api = Api(app, version='1.0', title='Micro Mouse Maze API',
-          description='A simple API for the Micro Mouse Maze')
+api_instance = Api(app, version='1.0', title='API de Labirinto', description='Uma API simples para manipular labirintos.')
 
-api.add_namespace(maze_ns, path="/maze")
+api_instance.add_namespace(api.views.api, path='/api')
 
 if __name__ == '__main__':
     app.run(debug=True)

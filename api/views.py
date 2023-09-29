@@ -1,80 +1,112 @@
 from flask_restx import Resource, Namespace, fields, reqparse
-from api.models import Maze
-import random
-import time
+from .models import Maze
 
-api = Namespace('maze', description='Maze operations')
 
-# Models for Swagger documentation
-maze_model = api.model('Maze', {
-    'vertex': fields.Integer(required=True, description='Current vertex ID'),
-    'directions': fields.List(fields.Integer, description='Possible directions from the current vertex')
+api = Namespace('labirinto', description='Operações do Labirinto')
+
+# Modelos de requisição e resposta
+start_model = api.model('Start', {
+    'id': fields.String(required=True, description='ID do usuário'),
+    'labirinto': fields.String(required=True, description='Nome do labirinto')
 })
 
-generate_model = api.model('Generate', {
-    'vertices': fields.Integer(required=True, description='Number of vertices'),
-    'edges': fields.Integer(required=True, description='Number of edges')
+move_model = api.clone('Move', start_model, {
+    'nova_posicao': fields.Integer(required=True, description='Nova posição desejada')
 })
 
-# Global variables
-maze = None
-current_vertex = None
-exploration_end_time = None
+validate_model = api.clone('Validate', move_model, {
+    'todos_movimentos': fields.List(fields.Integer, required=True, description='Todos os movimentos feitos')
+})
 
-generate_parser = reqparse.RequestParser()
-generate_parser.add_argument('vertices', type=int, required=True)
-generate_parser.add_argument('edges', type=int, required=True)
+start_response_model = api.model('StartResponse', {
+    'pos_atual': fields.Integer(description='Posição atual'),
+    'inicio': fields.Boolean(description='É o início?'),
+    'final': fields.Boolean(description='É o fim?'),
+    'movimentos': fields.List(fields.Integer, description='Movimentos possíveis')
+})
 
-@api.route('/generate')
-class GenerateMaze(Resource):
-    @api.expect(generate_model)
+move_response_model = api.clone('MoveResponse', start_response_model)
+
+validate_response_model = api.model('ValidateResponse', {
+    'caminho_valido': fields.Boolean(description='O caminho é válido?'),
+    'quantidade_movimentos': fields.Integer(description='Quantidade total de movimentos feitos')
+})
+
+maze_instance = Maze(10, 10)
+maze_instance.generate_maze()
+maze_graph = maze_instance.get_graph_representation()
+initial_position = 0
+final_position = (maze_instance.rows - 1) * maze_instance.cols + (maze_instance.cols - 1)
+user_positions = {}  # Armazenar a posição atual do usuário baseada no ID
+
+@api.route('/iniciar')
+class Start(Resource):
+    @api.expect(start_model)
+    @api.response(200, 'Success', start_response_model)
     def post(self):
-        global maze
-        args = generate_parser.parse_args()
-        num_vertices = args['vertices']
-        num_edges = args['edges']
-        maze = Maze(num_vertices, num_edges)
-        return {'success': True}, 201
-
-@api.route('/start')
-class StartExploration(Resource):
-    @api.marshal_with(maze_model)
-    def get(self):
-        global current_vertex, exploration_end_time
-        if maze is None:
-            return {"error": "Maze not generated. Please generate first."}, 400
-        current_vertex = random.choice(list(maze.graph.keys()))
-        exploration_end_time = time.time() + 40
-        return {
-            'vertex': current_vertex,
-            'directions': maze.get_possible_directions(current_vertex)
-        }
-
-@api.route('/move/<int:direction>')
-class MoveDirection(Resource):
-    @api.marshal_with(maze_model)
-    def get(self, direction):
-        global current_vertex
-        if maze is None:
-            return {"error": "Maze not generated. Please generate first."}, 400
-        if direction not in maze.get_possible_directions(current_vertex):
-            return {"error": "Invalid move direction"}, 400
+        parser = reqparse.RequestParser()
+        parser.add_argument('id', type=str, required=True)
+        parser.add_argument('labirinto', type=str, required=True)
+        args = parser.parse_args()
         
-        if time.time() > exploration_end_time:
-            return {"error": "Exploration time exceeded"}, 403
+        user_id = args['id']
+        user_positions[user_id] = initial_position
+
+        possible_moves = maze_graph[initial_position]
         
-        current_vertex = direction
         return {
-            'vertex': current_vertex,
-            'directions': maze.get_possible_directions(current_vertex)
-        }
+            "pos_atual": initial_position,
+            "inicio": True,
+            "final": False,
+            "movimentos": possible_moves
+        }, 200
 
-@api.route('/remaining_time')
-class RemainingTime(Resource):
-    def get(self):
-        global exploration_end_time
-        if exploration_end_time is None:
-            return {"error": "Exploration hasn't started yet"}, 400
+@api.route('/movimentar')
+class Move(Resource):
+    @api.expect(move_model)
+    @api.response(200, 'Success', move_response_model)
+    def post(self):
+        parser = reqparse.RequestParser()
+        parser.add_argument('id', type=str, required=True)
+        parser.add_argument('labirinto', type=str, required=True)
+        parser.add_argument('nova_posicao', type=int, required=True)
+        args = parser.parse_args()
+        
+        user_id = args['id']
+        new_position = args['nova_posicao']
 
-        remaining = max(exploration_end_time - time.time(), 0)
-        return {'remaining_time': remaining}
+        # Verificar se o movimento é válido
+        if new_position not in maze_graph[user_positions[user_id]]:
+            return {"message": "Movimento inválido."}, 400
+
+        user_positions[user_id] = new_position
+
+        possible_moves = maze_graph[new_position]
+        
+        return {
+            "pos_atual": new_position,
+            "inicio": new_position == initial_position,
+            "final": new_position == final_position,
+            "movimentos": possible_moves
+        }, 200
+
+@api.route('/valida_caminho')
+class Validate(Resource):
+    @api.expect(validate_model)
+    @api.response(200, 'Success', validate_response_model)
+    def post(self):
+        parser = reqparse.RequestParser()
+        parser.add_argument('id', type=str, required=True)
+        parser.add_argument('labirinto', type=str, required=True)
+        parser.add_argument('todos_movimentos', type=list, required=True)
+        args = parser.parse_args()
+        
+        path = args['todos_movimentos']
+        
+        is_valid = all((path[i], path[i+1]) in maze_graph.items() for i in range(len(path)-1))
+        
+        return {
+            "caminho_valido": is_valid,
+            "quantidade_movimentos": len(path)
+        }, 200
+

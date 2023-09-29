@@ -1,6 +1,7 @@
-from flask import Flask
-from flask_restful import Api
-from flask_restful_swagger import swagger
+from flask import Blueprint
+from flask_restx import Api
 
-app = Flask(__name__)
-api = swagger.docs(Api(app), apiVersion='1.0', api_spec_url='/swagger')
+api_blueprint = Blueprint('api', __name__)
+api = Api(api_blueprint, version='1.0', title='Labirinto API', description='API para Labirinto')
+
+from . import views
